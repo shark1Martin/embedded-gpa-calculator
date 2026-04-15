@@ -27,7 +27,7 @@ Numeric grades are mapped to a 4.0 scale:
 - 50-52 => 0.7
 - <50 => 0.0
 
-* GPA Scale is based off of this source: https://www.ouac.on.ca/guide/undergraduate-grade-conversion-table/*
+*GPA Scale is based off of this source: https://www.ouac.on.ca/guide/undergraduate-grade-conversion-table/*
 
 Letter grades are also supported (`A+` through `F`) in case your portal uses letters.
 
