@@ -1,23 +1,6 @@
 (function () {
-  const OVERLAY_CLASS = "gpa-overlay-extension";
+  const OVERLAY_ID = "gpa-overlay-extension";
   let rafHandle = null;
-  let overlayCounter = 0;
-
-  const letterToPoint = {
-    "A+": 4.0,
-    A: 4.0,
-    "A-": 3.7,
-    "B+": 3.3,
-    B: 3.0,
-    "B-": 2.7,
-    "C+": 2.3,
-    C: 2.0,
-    "C-": 1.7,
-    "D+": 1.3,
-    D: 1.0,
-    "D-": 0.7,
-    F: 0
-  };
 
   function gradeToPoint(rawGrade) {
     const grade = rawGrade.trim().replace(/\u00a0/g, "");
@@ -41,13 +24,19 @@
       return 0;
     }
 
-    const normalizedLetter = grade.toUpperCase();
-    return normalizedLetter in letterToPoint ? letterToPoint[normalizedLetter] : null;
+    return null;
   }
 
-  function parseUnit(rawUnits) {
-    const cleaned = rawUnits.trim().replace(/\u00a0/g, "");
+  function parseCredits(raw) {
+    const cleaned = raw.trim().replace(/\u00a0/g, "");
     if (!cleaned) return null;
+    const value = Number(cleaned);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function parseNumericGrade(rawGrade) {
+    const cleaned = rawGrade.trim().replace(/\u00a0/g, "");
+    if (!/^\d+(\.\d+)?$/.test(cleaned)) return null;
     const value = Number(cleaned);
     return Number.isFinite(value) ? value : null;
   }
@@ -66,43 +55,49 @@
       normalizeHeader(th.textContent || "")
     );
 
-    const unitsIndex = headers.findIndex((value) => value === "units");
+    const creditsIndex = headers.findIndex((value) => value === "units");
     const gradeIndex = headers.findIndex((value) => value === "grade");
 
-    if (unitsIndex === -1 || gradeIndex === -1) return null;
+    if (creditsIndex === -1 || gradeIndex === -1) return null;
 
     return {
-      unitsIndex,
+      creditsIndex,
       gradeIndex
     };
   }
 
+  function getBodyRows(table) {
+    return Array.from(table.querySelectorAll("tbody tr"));
+  }
+
   function readRows(table, columns) {
     const rows = [];
-    const bodyRows = table.querySelectorAll("tbody tr");
+    const bodyRows = getBodyRows(table);
 
     for (const row of bodyRows) {
       const cells = row.querySelectorAll("td");
       if (
-        cells.length <= Math.max(columns.unitsIndex, columns.gradeIndex)
+        cells.length <= Math.max(columns.creditsIndex, columns.gradeIndex)
       ) {
         continue;
       }
 
-      const unitEl = cells[columns.unitsIndex];
+      const creditEl = cells[columns.creditsIndex];
       const gradeEl = cells[columns.gradeIndex];
 
-      if (!unitEl || !gradeEl) continue;
+      if (!creditEl || !gradeEl) continue;
 
-      const unitValue = parseUnit(unitEl.textContent || "");
-      const gradePoint = gradeToPoint(gradeEl.textContent || "");
       const rawGrade = (gradeEl.textContent || "").trim().replace(/\u00a0/g, "");
+      const credits = parseCredits(creditEl.textContent || "");
+      const gradePoint = gradeToPoint(rawGrade);
+      const numericGrade = parseNumericGrade(rawGrade);
 
-      if (unitValue == null || gradePoint == null) continue;
+      if (credits == null || gradePoint == null) continue;
 
       rows.push({
-        units: unitValue,
+        credits,
         gradePoint,
+        numericGrade,
         rawGrade
       });
     }
@@ -112,44 +107,55 @@
 
   function calculateGpa(rows) {
     let weightedTotal = 0;
-    let totalUnits = 0;
+    let totalCredits = 0;
+    let weightedPercentTotal = 0;
+    let percentCredits = 0;
 
     for (const row of rows) {
-      weightedTotal += row.gradePoint * row.units;
-      totalUnits += row.units;
+      weightedTotal += row.gradePoint * row.credits;
+      totalCredits += row.credits;
+      if (row.numericGrade != null) {
+        weightedPercentTotal += row.numericGrade * row.credits;
+        percentCredits += row.credits;
+      }
     }
 
-    if (totalUnits <= 0) {
+    if (totalCredits <= 0) {
       return null;
     }
 
     return {
-      gpa: weightedTotal / totalUnits,
-      totalUnits,
+      gpa: weightedTotal / totalCredits,
+      weightedAveragePercent:
+        percentCredits > 0 ? weightedPercentTotal / percentCredits : null,
+      totalCredits,
       countedCourses: rows.length
     };
   }
 
   function ensureOverlay(table) {
+    removeLegacyOverlays();
+
     const parent = table.parentNode;
     if (!parent) return null;
 
-    const tableKey = table.dataset.gpaOverlayKey || table.id || `table-${overlayCounter++}`;
-    table.dataset.gpaOverlayKey = tableKey;
-    let overlay = parent.querySelector(
-      `.${OVERLAY_CLASS}[data-gpa-table-key="${CSS.escape(tableKey)}"]`
-    );
-
+    let overlay = document.getElementById(OVERLAY_ID);
     if (!overlay) {
       overlay = document.createElement("div");
-      overlay.className = OVERLAY_CLASS;
-      overlay.dataset.gpaTableKey = tableKey;
+      overlay.id = OVERLAY_ID;
       parent.insertBefore(overlay, table);
-    } else if (overlay.nextElementSibling !== table) {
+    } else if (overlay.parentNode !== parent || overlay.nextElementSibling !== table) {
       parent.insertBefore(overlay, table);
     }
 
     return overlay;
+  }
+
+  function removeLegacyOverlays() {
+    const legacy = document.querySelectorAll(".gpa-overlay-extension");
+    for (const node of legacy) {
+      node.remove();
+    }
   }
 
   function renderOverlay(table, result) {
@@ -158,35 +164,122 @@
 
     if (!result) {
       overlay.innerHTML =
-        '<div class="gpa-title">GPA Overlay</div><div class="gpa-empty">No posted numeric/letter grades found yet.</div>';
+        '<div class="gpa-row"><span class="gpa-kv"><strong>GPA:</strong> N/A</span><span class="gpa-kv">Weight Average: N/A</span><span class="gpa-kv">Courses: 0</span><span class="gpa-kv">Credits: 0.00</span></div>';
       return;
     }
 
+    const averageText =
+      result.weightedAveragePercent == null
+        ? "N/A"
+        : `${result.weightedAveragePercent.toFixed(2)}%`;
+
     overlay.innerHTML = `
-      <div class="gpa-title">Current GPA</div>
-      <div class="gpa-value">${result.gpa.toFixed(2)} / 4.00</div>
-      <div class="gpa-meta">Counted courses: ${result.countedCourses} | Total units: ${result.totalUnits.toFixed(2)}</div>
+      <div class="gpa-row">
+        <span class="gpa-kv"><strong>GPA:</strong> ${result.gpa.toFixed(2)} / 4.00</span>
+        <span class="gpa-kv">Weighted Average: ${averageText}</span>
+        <span class="gpa-kv">Courses: ${result.countedCourses}</span>
+        <span class="gpa-kv">Credits: ${result.totalCredits.toFixed(2)}</span>
+      </div>
     `;
   }
 
+  function isElementVisible(element) {
+    const styles = window.getComputedStyle(element);
+    if (styles.display === "none" || styles.visibility === "hidden") return false;
+    if (element.closest('[aria-hidden="true"]')) return false;
+    return element.getClientRects().length > 0;
+  }
+
   function findEligibleTables() {
-    return Array.from(document.querySelectorAll("table")).filter((table) => {
-      const columns = findColumnIndexes(table);
-      return columns !== null;
-    });
+    return Array.from(document.querySelectorAll("table"))
+      .map((table) => {
+        const columns = findColumnIndexes(table);
+        if (!columns) return null;
+        const bodyRowCount = getBodyRows(table).length;
+        if (!bodyRowCount) return null;
+        const parsedRows = readRows(table, columns);
+        return {
+          table,
+          columns,
+          bodyRowCount,
+          parsedRowsCount: parsedRows.length,
+          visible: isElementVisible(table)
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function findTermAnchor() {
+    const selects = Array.from(document.querySelectorAll("select"));
+    return (
+      selects.find((select) => {
+        const idNameLabel = [
+          select.id || "",
+          select.name || "",
+          select.getAttribute("aria-label") || ""
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (idNameLabel.includes("term")) return true;
+
+        const localText = (
+          select.closest("tr, div, td, form")?.textContent || ""
+        ).toLowerCase();
+        return localText.includes("select term");
+      }) || null
+    );
+  }
+
+  function selectPrimaryTable(candidates) {
+    if (!candidates.length) return null;
+
+    const termAnchor = findTermAnchor();
+    if (termAnchor && isElementVisible(termAnchor)) {
+      const anchorRect = termAnchor.getBoundingClientRect();
+      const positioned = candidates
+        .map((candidate) => {
+          const tableRect = candidate.table.getBoundingClientRect();
+          const distanceFromTerm = tableRect.top - anchorRect.bottom;
+          return {
+            ...candidate,
+            distanceFromTerm
+          };
+        })
+        .filter((candidate) => candidate.distanceFromTerm >= -4)
+        .sort((a, b) => a.distanceFromTerm - b.distanceFromTerm);
+
+      if (positioned.length) {
+        return positioned[0];
+      }
+    }
+
+    return candidates.sort((a, b) => {
+      const visibleDelta = Number(b.visible) - Number(a.visible);
+      if (visibleDelta !== 0) return visibleDelta;
+
+      const parsedDelta = b.parsedRowsCount - a.parsedRowsCount;
+      if (parsedDelta !== 0) return parsedDelta;
+
+      return b.bodyRowCount - a.bodyRowCount;
+    })[0];
+  }
+
+  function clearOverlayIfAny() {
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (overlay) overlay.remove();
   }
 
   function update() {
-    const tables = findEligibleTables();
-    if (!tables.length) return;
-
-    for (const table of tables) {
-      const columns = findColumnIndexes(table);
-      if (!columns) continue;
-      const rows = readRows(table, columns);
-      const result = calculateGpa(rows);
-      renderOverlay(table, result);
+    const candidates = findEligibleTables();
+    const target = selectPrimaryTable(candidates);
+    if (!target) {
+      clearOverlayIfAny();
+      return;
     }
+
+    const rows = readRows(target.table, target.columns);
+    const result = calculateGpa(rows);
+    renderOverlay(target.table, result);
   }
 
   function scheduleUpdate() {
